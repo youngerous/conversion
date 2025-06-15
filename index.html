@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Converter</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 720px;
+      margin: 40px auto;
+      text-align: center;
+    }
+    h1 {
+      margin-bottom: 24px;
+    }
+    input[type="file"] {
+      margin: 16px 0;
+    }
+    label {
+      margin-right: 8px;
+      user-select: none;
+    }
+    button {
+      padding: 10px 24px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #download-link {
+      display: none;
+      margin-top: 24px;
+      font-size: 18px;
+      color: #005bbb;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <h1>Converter</h1>
+
+  <input type="file" id="file-input" accept=".xls,.xlsx" />
+
+  <div>
+    <label><input type="checkbox" id="is-lh" /> File from LH?</label>
+  </div>
+
+  <button id="convert-btn">변환 실행</button>
+
+  <p id="filename"></p>
+
+  <p><a id="download-link">변환된 파일 다운로드</a></p>
+
+  <!-- SheetJS Library -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <script>
+    /* === Helper functions (ported from conversion_core.py) === */
+    function preprocessLH(x) {
+      const multiplier = 1e8;
+      return x >= 0
+        ? Math.ceil(x * multiplier) / multiplier
+        : Math.trunc(x * multiplier) / multiplier;
+    }
+
+    function convertPred(x, interval) {
+      return Math.floor(x / interval) * interval;
+    }
+
+    /* === Main conversion logic === */
+    function convertExcel(workbook, options) {
+      const { isLH, labelExist, firstColumnExist } = options;
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+
+      // Read sheet to JSON/Array depending on header presence
+      const data = XLSX.utils.sheet_to_json(sheet, {
+        header: labelExist ? 0 : 1,
+        defval: null, // keep nulls so positions stay consistent
+      });
+
+      let targetVals = [];
+
+        // No header: treat rows as arrays
+        if (firstColumnExist) {
+          targetVals = data.map((row) => row[1]);
+        } else {
+          // The whole sheet is one column of interest
+          targetVals = data.flat();
+        }
+      // }
+
+      // Remove null / undefined / empty
+      targetVals = targetVals.filter((v) => v !== null && v !== undefined && v !== "");
+
+      const interval = isLH ? 0.0000025 : 0.00025;
+
+      const processed = targetVals.map((v) => Number(v)).map((v) => (isLH ? preprocessLH(v) : v));
+      const converted = processed.map((v) => convertPred(v, interval));
+
+      // Build a new sheet with index column, converted values, and x4 column
+      const outData = [
+        ["", "converted", "x4"], // header row: index, converted, x4
+        ...converted.map((v, i) => [i + 1, v, v * 4])
+      ];
+      const outWs = XLSX.utils.aoa_to_sheet(outData);
+      const outWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(outWb, outWs, "result");
+      return outWb;
+    }
+
+    /* === UI bindings === */
+    document.getElementById("convert-btn").addEventListener("click", () => {
+      const fileInput = document.getElementById("file-input");
+      const file = fileInput.files[0];
+      if (!file) {
+        alert("엑셀 파일을 선택해주세요.");
+        return;
+      }
+
+      const options = {
+        isLH: document.getElementById("is-lh").checked,
+        labelExist: false, // header not exist
+        firstColumnExist: true, // index column exist
+      };
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const outWb = convertExcel(workbook, options);
+
+        const wbArray = XLSX.write(outWb, { bookType: "xlsx", type: "array" });
+        const blob = new Blob([wbArray], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+
+        const originalName = file.name.replace(/\.xls(x)?$/i, "");
+        const downloadName = `${originalName}-변환.xlsx`;
+
+        const url = URL.createObjectURL(blob);
+        const linkEl = document.getElementById("download-link");
+        linkEl.href = url;
+        linkEl.download = downloadName;
+        linkEl.style.display = "inline-block";
+
+        document.getElementById("filename").textContent = `다운로드 파일명: ${downloadName}`;
+      };
+
+      reader.readAsArrayBuffer(file);
+    });
+  </script>
+</body>
+</html> 
